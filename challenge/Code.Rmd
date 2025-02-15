@@ -1,0 +1,138 @@
+---
+title: "LSE Practitioners' Challenge"
+author: "Group 3"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(reshape2) 
+library(lubridate)
+library(gridExtra)
+library(zoo)
+library(tseries) 
+library(car) 
+library(moments)
+library(knitr)
+library(knitr)
+library(quantmod)
+library(PerformanceAnalytics)
+library(timeSeries)
+library(roll)
+library(MASS)
+library(extraDistr)
+library(rugarch)
+library(QRM)
+library(kableExtra)
+library(ggplot2)
+```
+
+Indices:
+- NASDAQ
+- S&P500
+- VIX (S&P500)
+
+```{r ,echo = FALSE}
+#------------------------- Cleaning Data ---------------------------------------
+# Insert relevant path to data
+SNP <- read.csv("", header = TRUE)
+
+# Ensure Date is in proper format
+SNP$Date <- ymd(SNP$Date) 
+SNP <- SNP[order(SNP$Date), ]
+
+
+#------------------------- Prices ----------------------------------------------
+prices <- SNP[, c("Date", "S.P.500.Index")]
+colnames(prices) <- c("date", "price")
+
+#------------------------- Simple Returns (Manual Calculation) -----------------
+n <- nrow(prices)
+simple_returns <- numeric(n)  # Initialize vector with zeros
+simple_returns[2:n] <- (prices$price[2:n] - prices$price[1:(n - 1)]) / prices$price[1:(n - 1)]
+simple_returns[1] <- NA  # First return is NA
+
+#------------------------- Log Returns -----------------------------------------
+log_returns <- numeric(n)  # Initialize vector
+log_returns[2:n] <- log(1 + simple_returns[2:n])  # log(1 + simple return)
+log_returns[1] <- NA  # First return is NA
+
+#------------------------- Updating DataFrame ----------------------------------
+prices$simple_returns <- simple_returns
+prices$log_returns <- log_returns
+
+# Removing first row due to NA returns
+prices <- prices[-1, ]
+
+```
+
+# Slice time period
+```{r}
+# Function to slice time period from SNP dataset
+slice_time_period <- function(data, start_date, end_date) {
+  # Filter the dataset within the time range
+  sliced_data <- data[data$date >= start_date & data$date <= end_date, ]
+  
+  # Return the filtered dataset
+  return(sliced_data)
+}
+
+covid_SNP <- slice_time_period(prices, "2020-01-01", "2020-09-30")
+print(covid_SNP)
+```
+### Estimate Hurst Param
+
+```{r}
+# Load necessary libraries
+library(pracma)   # Alternative for fractal (R/S Analysis)
+library(longmemo) # Whittle Estimation
+library(wavelets) # Wavelet-based estimation
+
+prices <- covid_SNP
+#------------------------- Estimating Hurst Exponent (H) ----------------------
+
+# pracma package - Hurst exponent estimation using R/S Analysis
+hurst_pracma_rs <- hurstexp(prices$log_returns)$Hs  # Simple R/S estimate
+
+# pracma package - DFA (Detrended Fluctuation Analysis)
+hurst_pracma_dfa <- hurstexp(prices$log_returns)$Hd
+
+# longmemo package - H estimation using Whittle Likelihood
+hurst_longmemo <- WhittleEst(prices$log_returns)$H
+
+# wavelets package - Estimating H using Wavelet-based method
+wt <- wavelets::dwt(prices$log_returns, filter="haar", n.levels = 4)
+# Extract detail coefficients at each level
+vars <- sapply(wt@W, var)
+# The "scale" is typically 2^(level index), or wavelet filters define exact scales
+scales <- 2^(1:length(vars))  
+# Fit a linear model to log(vars) vs. log(scales)
+fit <- lm(log(vars) ~ log(scales))
+slope <- coef(fit)[2]
+# Depending on the definition, H is often (slope + 1) / 2
+hurst_wavelet <- (slope + 1)/2
+
+#------------------------- Display Results --------------------------------------
+hurst_results <- data.frame(
+  Method = c("pracma (R/S Analysis)", 
+             "pracma (DFA)", 
+             "longmemo (Whittle Estimation)", 
+             "wavelets (Wavelet-based)"),
+  H_Value = c(hurst_pracma_rs, 
+              hurst_pracma_dfa, 
+              hurst_longmemo, 
+              hurst_wavelet)
+)
+
+print(hurst_results)
+
+```
+
+
+
+
+
+
+
