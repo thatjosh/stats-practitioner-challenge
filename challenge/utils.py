@@ -4,9 +4,37 @@ import pandas as pd
 from hurst import compute_Hc
 from abc import ABC, abstractmethod
 
+"""
+Common utility methods demonstrated below:
+
+#### 1. Predict 1 day ####
+vix_training_data_obj = utils.VixDf(vix_training_df)
+next_day_pred = utils.simulate_fbm_ndays(vix_training_data_obj, 0.3, 1)
+print(f'Next day prediction: {next_day_pred}')
+
+#### 2. Predict 5 days ####
+vix_training_data_obj = utils.VixDf(vix_training_df)
+utils.apply_rolling_function(vix_training_data_obj, 500, 5)
+print(f'Next 5 days prediction: {next_day_pred}')
+
+#### 3. Predict from a start date, for a number of days, and then computes RMSE ####
+# let SNP be a df that's given, it should contain the price/vol, and its associated logged counterparts
+snp_obj = utils.SnpDf(SNP)
+res_df = utils.apply_rolling_predictions_from_start(snp_obj, '2020-01-01', 150)
+res_df = res_df.join(SNP, how='inner')
+utils.compute_rmse(res_df, 'predicted', 'price')
+"""
+
+def compute_rmse(df, predicted_col_name, actual_col_name):
+    diff = df[predicted_col_name] - df[actual_col_name]
+    mse = np.mean(diff ** 2)
+    rmse = np.sqrt(mse)
+    return rmse
+
 class TimeSeriesDf(ABC):
     def __init__(self, df):
         self.df = df
+        self.df.sort_index(ascending=True)
 
     @abstractmethod
     def get_start_value(self):
@@ -25,10 +53,12 @@ class TimeSeriesDf(ABC):
 
     @abstractmethod
     def get_series_for_hurst(self):
+        """Gets the time series data required to calculate the hurst exp."""
         pass
 
     @abstractmethod
     def create_df_obj(self):
+        """Creates a df object of the same type."""
         pass
 
 
@@ -58,16 +88,16 @@ class VixDf(TimeSeriesDf):
 class SnpDf(TimeSeriesDf):
     """Implements the TimeSeriesDf class."""
     def get_start_value(self):
-        pass
-
+        return self.df['price'].iloc[-1]
+    
     def get_mu(self):
-        pass
+        return self.df['log_returns'].mean()
     
     def get_sigma(self):
-        pass
+        return self.df['log_returns'].std()
 
     def get_series_for_hurst(self):
-        pass
+        return self.df['log_returns']
 
     def create_df_obj(self, data_slice):
         return SnpDf(data_slice)
@@ -108,10 +138,10 @@ def apply_rolling_function(
     window_slice = data_obj.get_window_slice(window_size)
     window_slice_obj = data_obj.create_df_obj(window_slice)
 
-    # Compute h
+    # Compute hurst exponent
     h, _, _ = compute_Hc(data_obj.get_series_for_hurst(), kind='change', simplified=True)
 
-    # Run the simulation for the specified number of days
+    # Run simulation
     return simulate_fbm_ndays(window_slice_obj, h, predict_days)
 
 def apply_rolling_predictions_from_start(
@@ -119,9 +149,7 @@ def apply_rolling_predictions_from_start(
         start_date: str, 
         window_size: int,
     ):
-        """
-        Applies the simulation function on rolling windows starting from a given start_date.
-        
+        """Applies the simulation function on rolling windows starting from a given start_date.
         Returns: the predictions as a pandas df.
         """
         # Ensure the series is sorted
@@ -137,7 +165,7 @@ def apply_rolling_predictions_from_start(
             window_slice = data_obj.create_df_obj(slice)
             predictions[ts.index[i]] = apply_rolling_function(window_slice, window_size, 1)
 
-        # Convert predictions to a DF
+        # Convert predictions into DF and return it
         pred_df = pd.DataFrame.from_dict(predictions, orient='index')
         pred_df.columns = ["predicted"]
         pred_df = pred_df.sort_index()
