@@ -123,10 +123,10 @@ def simulate_fbm_ndays(
 
     # Assume this returns a full path including time 0
     fbm_full = fbm.sample(n=n_days)
-    simulated_vix = S0 * np.exp(mu * time_points + sigma * fbm_full)
+    simulated_data = S0 * np.exp(mu * time_points + sigma * fbm_full)
 
     # Remove t=0
-    return simulated_vix[1:]
+    return simulated_data[1:]
 
 def apply_rolling_function(
         data_obj: TimeSeriesDf, window_size: int, predict_days: int
