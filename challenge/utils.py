@@ -109,7 +109,7 @@ def simulate_fbm_ndays(
     time_points = n_days + 1 
 
     # Calculate drift (μ) and volatility (σ)
-    mu = train_data_obj.get_sigma()
+    mu = train_data_obj.get_mu()
     sigma = train_data_obj.get_sigma()
 
     # Starting value
