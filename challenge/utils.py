@@ -91,13 +91,13 @@ class SnpDf(TimeSeriesDf):
         return self.df['price'].iloc[-1]
     
     def get_mu(self):
-        return self.df['log_returns'].mean()
+        return self.df['realised_log_returns'].mean()
     
     def get_sigma(self):
-        return self.df['log_returns'].std()
+        return self.df['realised_log_returns'].std()
 
     def get_series_for_hurst(self):
-        return self.df['log_returns']
+        return self.df['realised_log_returns']
 
     def create_df_obj(self, data_slice):
         return SnpDf(data_slice)
