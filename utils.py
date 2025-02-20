@@ -102,6 +102,25 @@ class SnpDf(TimeSeriesDf):
     def create_df_obj(self, data_slice):
         return SnpDf(data_slice)
 
+
+class NasdaqDf(TimeSeriesDf):
+    """Implements the TimeSeriesDf class."""
+    def get_start_value(self):
+        return self.df['price'].iloc[-1]
+    
+    def get_mu(self):
+        return self.df['log_returns'].mean()
+    
+    def get_sigma(self):
+        return self.df['log_returns'].std()
+
+    def get_series_for_hurst(self):
+        return self.df['log_returns']
+
+    def create_df_obj(self, data_slice):
+        return NasdaqDf(data_slice)
+
+
 def simulate_fbm_ndays(
         train_data_obj: TimeSeriesDf, H: float, n_days=1
     ):
