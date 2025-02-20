@@ -70,7 +70,7 @@ class TimeSeriesDf(ABC):
         return self.get_df().iloc[-window_size:]
 
 class VixDf(TimeSeriesDf):
-    """Implements the TimeSeriesDf class."""
+    """Implements the fBM model for S&P500 VIX data."""
     def get_start_value(self):
         return self.df['vol'].iloc[-1]
     
@@ -87,7 +87,7 @@ class VixDf(TimeSeriesDf):
         return VixDf(data_slice)
 
 class SnpDf(TimeSeriesDf):
-    """Implements the TimeSeriesDf class for S&P500 data."""
+    """Implements the fBM model for S&P500 data."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
     
@@ -104,7 +104,7 @@ class SnpDf(TimeSeriesDf):
         return SnpDf(data_slice)
 
 class NasdaqDf(TimeSeriesDf):
-    """Implements the TimeSeriesDf class for Nasdaq data."""
+    """Implements the fBM model for Nasdaq data."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
     
