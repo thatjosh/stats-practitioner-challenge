@@ -3,18 +3,19 @@ import numpy as np
 import pandas as pd
 from hurst import compute_Hc
 from abc import ABC, abstractmethod
+from arch import arch_model
 
 """
 Common utility methods demonstrated below:
 
 #### 1. Predict 1 day ####
 vix_training_data_obj = utils.VixDf(vix_training_df)
-next_day_pred = utils.simulate_fbm_ndays(vix_training_data_obj, 0.3, 1)
+next_day_pred = utils.simulate_fbm(vix_training_data_obj, 0.3, 1)
 print(f'Next day prediction: {next_day_pred}')
 
 #### 2. Predict 5 days ####
 vix_training_data_obj = utils.VixDf(vix_training_df)
-utils.apply_rolling_function(vix_training_data_obj, 500, 5)
+utils.predict_with_fbm(vix_training_data_obj, 500, 5)
 print(f'Next 5 days prediction: {next_day_pred}')
 
 #### 3. Predict from a start date, for a number of days, and then computes RMSE ####
@@ -86,7 +87,7 @@ class VixDf(TimeSeriesDf):
         return VixDf(data_slice)
 
 class SnpDf(TimeSeriesDf):
-    """Implements the TimeSeriesDf class."""
+    """Implements the TimeSeriesDf class for S&P500 data."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
     
@@ -102,9 +103,8 @@ class SnpDf(TimeSeriesDf):
     def create_df_obj(self, data_slice):
         return SnpDf(data_slice)
 
-
 class NasdaqDf(TimeSeriesDf):
-    """Implements the TimeSeriesDf class."""
+    """Implements the TimeSeriesDf class for Nasdaq data."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
     
@@ -120,9 +120,31 @@ class NasdaqDf(TimeSeriesDf):
     def create_df_obj(self, data_slice):
         return NasdaqDf(data_slice)
 
+def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
+    garch_model = arch_model(log_returns, vol='Garch', p=1, q=1)
+    res = garch_model.fit()
+    conditional_volatilities = res.conditional_volatility
+    return conditional_volatilities[-1]
 
-def simulate_fbm_ndays(
-        train_data_obj: TimeSeriesDf, H: float, n_days=1
+class GarchFbmHybridSnp(TimeSeriesDf):
+    """Implements the GARCH-fBM model with S&P500 data."""
+    def get_start_value(self):
+        return self.df['price'].iloc[-1]
+    
+    def get_mu(self):
+        return self.df['log_returns'].mean()
+    
+    def get_sigma(self):
+        return fit_garch_and_obtain_conditional_vol(self.df['log_returns'])
+
+    def get_series_for_hurst(self):
+        return self.df['log_returns']
+
+    def create_df_obj(self, data_slice):
+        return GarchFbmHybridSnp(data_slice)
+
+def simulate_fbm(
+        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1
     ):
     # DF correction (account for day 0)
     time_points = n_days + 1 
@@ -134,20 +156,26 @@ def simulate_fbm_ndays(
     # Starting value
     S0 = train_data_obj.get_start_value()
 
-    # Time points for the drift component
-    time_points = np.arange(time_points)
+    # Create an array of time points for the drift component
+    times = np.arange(time_points)
 
-    # Create the fBM model
-    fbm = FractionalBrownianMotion(hurst=H, t=n_days)
+    # Initialize an array to store the simulated paths
+    simulated_paths = np.zeros((n_simulations, len(times)))
+    
+    # Monte Carlo simulation loop: simulate n_paths of FBM
+    for i in range(n_simulations):
+        # FBM path (inc time 0)
+        fbm = FractionalBrownianMotion(hurst=H, t=n_days)
+        fbm_full = fbm.sample(n=n_days)
 
-    # Assume this returns a full path including time 0
-    fbm_full = fbm.sample(n=n_days)
-    simulated_data = S0 * np.exp(mu * time_points + sigma * fbm_full)
+        simulated_data = S0 * np.exp(mu * times + sigma * fbm_full)
+        simulated_paths[i, :] = simulated_data
+    ensemble_average = np.mean(simulated_paths, axis=0)
 
-    # Remove t=0
-    return simulated_data[1:]
+    # Return the average outcomes for days 1 through n_days (excluding t=0)
+    return ensemble_average[1:]
 
-def apply_rolling_function(
+def predict_with_fbm(
         data_obj: TimeSeriesDf, window_size: int, predict_days: int
     ):
     """Applies the simulation function to the last rolling window slice of the time series 
@@ -161,7 +189,7 @@ def apply_rolling_function(
     h, _, _ = compute_Hc(data_obj.get_series_for_hurst(), kind='change', simplified=True)
 
     # Run simulation
-    return simulate_fbm_ndays(window_slice_obj, h, predict_days)
+    return simulate_fbm(window_slice_obj, h, predict_days)
 
 def apply_rolling_predictions_from_start(
         data_obj: TimeSeriesDf, 
@@ -182,7 +210,7 @@ def apply_rolling_predictions_from_start(
         for i in range(start_idx - window_size - 1, len(ts)):
             slice = ts.iloc[i - window_size + 1 : i]
             window_slice = data_obj.create_df_obj(slice)
-            predictions[ts.index[i]] = apply_rolling_function(window_slice, window_size, 1)
+            predictions[ts.index[i]] = predict_with_fbm(window_slice, window_size, 1)
 
         # Convert predictions into DF and return it
         pred_df = pd.DataFrame.from_dict(predictions, orient='index')
