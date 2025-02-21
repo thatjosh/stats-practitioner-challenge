@@ -167,11 +167,10 @@ def simulate_fbm(
         # FBM path (inc time 0)
         fbm = FractionalBrownianMotion(hurst=H, t=n_days)
         fbm_full = fbm.sample(n=n_days)
-
         simulated_data = S0 * np.exp(mu * times + sigma * fbm_full)
         simulated_paths[i, :] = simulated_data
     ensemble_average = np.mean(simulated_paths, axis=0)
-
+    
     # Return the average outcomes for days 1 through n_days (excluding t=0)
     return ensemble_average[1:]
 
