@@ -125,7 +125,7 @@ def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
     conditional_volatilities = res.conditional_volatility
     return conditional_volatilities[-1]
 
-class GarchFbmHybridSnp(TimeSeriesDf):
+class GarchFbmReturnForecast(TimeSeriesDf):
     """Implements the GARCH-fBM model with S&P500 data."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
@@ -140,7 +140,7 @@ class GarchFbmHybridSnp(TimeSeriesDf):
         return self.df['log_returns']
 
     def create_df_obj(self, data_slice):
-        return GarchFbmHybridSnp(data_slice)
+        return GarchFbmReturnForecast(data_slice)
 
 def simulate_fbm(
         train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1000
