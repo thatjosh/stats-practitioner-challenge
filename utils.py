@@ -80,7 +80,7 @@ class VixDf(TimeSeriesDf):
         return self.df['log_vol_diff'].std()
 
     def get_series_for_hurst(self):
-        return self.df['log_vol']
+        return self.df['log_vol_diff']
 
     def create_df_obj(self, data_slice):
         return VixDf(data_slice)
@@ -126,7 +126,7 @@ def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
     return conditional_volatilities[-1]
 
 class GarchFbmReturnForecast(TimeSeriesDf):
-    """Implements the GARCH-fBM model with S&P500 data."""
+    """Implements the GARCH-fBM model with S&P500 / NASDAQ data."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
     
@@ -138,6 +138,23 @@ class GarchFbmReturnForecast(TimeSeriesDf):
 
     def get_series_for_hurst(self):
         return self.df['log_returns']
+
+    def create_df_obj(self, data_slice):
+        return GarchFbmReturnForecast(data_slice)
+    
+class GarchFbmVolForecast(TimeSeriesDf):
+    """Implements the GARCH-fBM model with S&P500 VIX data."""
+    def get_start_value(self):
+        return self.df['vol'].iloc[-1]
+    
+    def get_mu(self):
+        return self.df['log_vol_diff'].mean()
+    
+    def get_sigma(self):
+        return fit_garch_and_obtain_conditional_vol(self.df['log_vol_diff'])
+
+    def get_series_for_hurst(self):
+        return self.df['log_vol']
 
     def create_df_obj(self, data_slice):
         return GarchFbmReturnForecast(data_slice)
