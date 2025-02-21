@@ -1,7 +1,8 @@
 import numpy as np
 import pandas as pd
 from scipy import stats
-from scipy.stats import chi2
+from scipy.stats import chi2, jarque_bera
+from statsmodels.stats.diagnostic import acorr_ljungbox
 
 def compute_hit_ratio(df, hurst_col='hurst', return_col='log_returns', threshold=0.5):
     """Compute the hit ratio for a trading strategy based on the Hurst exponent."""
@@ -34,11 +35,11 @@ def perform_jarque_bera_test(residuals):
         'Normality': 'Reject H0 (Not Normal)' if p_value < 0.05 else 'Fail to Reject H0 (Normal)'
     }
 
-def compute_var_violations(df, var_col, return_col, confidence_level=0.99):
+def compute_var_violations(df, var_col, predicted_col, confidence_level=0.99):
     df = df.dropna().copy()
     
     # Identify VaR exceedances (violations)
-    df['exceedance'] = df[return_col] < df[var_col]  # True if actual return is less than VaR
+    df['exceedance'] = df[predicted_col] < df[var_col]  # True if actual return is less than VaR
 
     # Count actual exceedances
     actual_exceedances = df['exceedance'].sum()
@@ -55,13 +56,14 @@ def compute_var_violations(df, var_col, return_col, confidence_level=0.99):
         'violation_ratio': violation_ratio
     }
 
-def bernoulli_coverage_test(df, var_col, return_col, confidence_level=0.99):
+def bernoulli_coverage_test(df, var_col, predicted_col, confidence_level=0.99):
+    
     df = df.dropna().copy()
     p = 1 - confidence_level
     N = len(df)
     
     # Identify VaR exceedances (violations)
-    df['exceedance'] = df[return_col] < df[var_col]  # True if actual return is less than VaR
+    df['exceedance'] = df[predicted_col] < df[var_col]  # True if actual return is less than VaR
 
     # Count actual exceedances
     X = df['exceedance'].sum()
@@ -78,3 +80,29 @@ def bernoulli_coverage_test(df, var_col, return_col, confidence_level=0.99):
     p_value = 1 - chi2.cdf(LR_POF, df=1)
 
     return p_value, LR_POF
+
+def in_sample_diagnostics(actual_log_returns: pd.Series, predicted_log_returns: pd.Series, cond_volatility: pd.Series):
+    """
+    Compute diagnostics for a time series forecasting model.
+    
+    Performs:
+    1) Jarque-Bera test for normality on residuals.
+    2) Ljung-Box test on residuals and squared residuals to check for autocorrelation.
+    """
+
+    # Compute residuals (forecast error)
+    residuals = actual_log_returns - predicted_log_returns
+    residuals = residuals.dropna()  # Ensure no NaNs
+    cond_volatility = cond_volatility.dropna()
+    std_residuals =  residuals / cond_volatility
+
+    # 1) Jarque-Bera test for normality
+    _, jb_pvalue = jarque_bera(std_residuals)
+    print(f"Jarque-Bera test p-value: {jb_pvalue:.5f}")
+
+    # 2) Ljung-Box test on residuals and squared residuals (first 10 lags)
+    lb1 = acorr_ljungbox(std_residuals, lags=[250], return_df=False)
+    lb2 = acorr_ljungbox(std_residuals**2, lags=[250], return_df=False)
+    
+    print(f"Ljung-Box (residuals) p-value, {lb1[1][0]:.5f}")
+    print(f"Ljung-Box (residuals^2) p-value, {lb2[1][0]:.5f}")
