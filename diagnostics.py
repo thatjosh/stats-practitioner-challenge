@@ -101,8 +101,16 @@ def in_sample_diagnostics(actual_log_returns: pd.Series, predicted_log_returns: 
     print(f"Jarque-Bera test p-value: {jb_pvalue:.5f}")
 
     # 2) Ljung-Box test on residuals and squared residuals (first 10 lags)
-    lb1 = acorr_ljungbox(std_residuals, lags=[250], return_df=False)
-    lb2 = acorr_ljungbox(std_residuals**2, lags=[250], return_df=False)
+    lb1 = acorr_ljungbox(std_residuals, lags=[10], return_df=False)
+    lb2 = acorr_ljungbox(std_residuals**2, lags=[10], return_df=False)
     
     print(f"Ljung-Box (residuals) p-value, {lb1[1][0]:.5f}")
     print(f"Ljung-Box (residuals^2) p-value, {lb2[1][0]:.5f}")
+
+
+def compute_hit_rate(predicted: pd.Series, actual: pd.Series) -> float:
+    """Compute the hit rate for forecasted returns versus actual log returns."""
+    sign_match = np.sign(predicted) == np.sign(actual)
+    hit_rate = sign_match.mean()
+    print(f"\nHit Rate: {hit_rate * 100:.2f}%")
+    return hit_rate

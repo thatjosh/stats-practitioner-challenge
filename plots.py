@@ -63,6 +63,14 @@ def plot_var_violations(df, var_col, predicted_col, title="VaR Violations"):
     ))
 
     # Plot VaR violations as red markers
+    fig.add_trace(go.Scatter(
+        x=df.index[df['exceedance']], 
+        y=df[predicted_col][df['exceedance']], 
+        mode='markers', 
+        name="VaR Violations", 
+        marker=dict(color='red', size=6, symbol='circle')
+    ))
+
     fig.update_layout(
         title=title,
         xaxis_title="Date",

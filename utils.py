@@ -62,7 +62,6 @@ class TimeSeriesDf(ABC):
         """Creates a df object of the same type."""
         pass
 
-
     def get_df(self):
         return self.df
     
@@ -122,7 +121,7 @@ class NasdaqDf(TimeSeriesDf):
 
 def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
     garch_model = arch_model(log_returns, vol='Garch', p=1, q=1)
-    res = garch_model.fit()
+    res = garch_model.fit(disp='off')
     conditional_volatilities = res.conditional_volatility
     return conditional_volatilities[-1]
 
@@ -144,7 +143,7 @@ class GarchFbmHybridSnp(TimeSeriesDf):
         return GarchFbmHybridSnp(data_slice)
 
 def simulate_fbm(
-        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1
+        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1000
     ):
     # DF correction (account for day 0)
     time_points = n_days + 1 
@@ -188,13 +187,16 @@ def predict_with_fbm(
     h, _, _ = compute_Hc(data_obj.get_series_for_hurst(), kind='change', simplified=True)
 
     # Run simulation
-    return simulate_fbm(window_slice_obj, h, predict_days)
+    return {
+        'fbm': simulate_fbm(window_slice_obj, h, predict_days),
+        'conditional_vol': window_slice_obj.get_sigma()
+    }
 
 def apply_rolling_predictions_from_start(
         data_obj: TimeSeriesDf, 
         start_date: str, 
         window_size: int,
-    ):
+    ) -> pd.DataFrame:
         """Applies the simulation function on rolling windows starting from a given start_date.
         Returns: the predictions as a pandas df.
         """
@@ -203,16 +205,29 @@ def apply_rolling_predictions_from_start(
 
         # Find the integer index for start_date
         start_idx = ts.index.searchsorted(pd.Timestamp(start_date), side='left')    
-        predictions = {}
+        dates, predictions, cond_vols = [], [], []
 
         # Loop over the series starting from when the first full window is available
         for i in range(start_idx - window_size - 1, len(ts)):
+            print(f'Day {i}...')
             slice = ts.iloc[i - window_size + 1 : i]
             window_slice = data_obj.create_df_obj(slice)
-            predictions[ts.index[i]] = predict_with_fbm(window_slice, window_size, 1)
+            predicted_value, cond_vol  = predict_with_fbm(window_slice, window_size, 1).values()
+            
+            dates.append(ts.index[i])
+            predictions.append(predicted_value[0])
+            cond_vols.append(cond_vol)
 
         # Convert predictions into DF and return it
-        pred_df = pd.DataFrame.from_dict(predictions, orient='index')
-        pred_df.columns = ["predicted"]
-        pred_df = pred_df.sort_index()
-        return pred_df
+        return pd.DataFrame({'predicted': predictions, 'conditional_vol': cond_vols}, index=pd.to_datetime(dates))
+
+
+def rescale_columns(df: pd.DataFrame, columns: list, scale_factor: float) -> pd.DataFrame:
+    """Rescales specified columns in a DF by scale factor."""
+    df = df.copy()
+    for col in columns:
+        if col in df.columns:
+            df[col] = df[col] / scale_factor
+        else:
+            print(f"Warning: Column '{col}' not found in DataFrame.")
+    return df
