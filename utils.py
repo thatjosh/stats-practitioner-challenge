@@ -154,10 +154,10 @@ class GarchFbmVolForecast(TimeSeriesDf):
         return fit_garch_and_obtain_conditional_vol(self.df['log_vol_diff'])
 
     def get_series_for_hurst(self):
-        return self.df['log_vol']
+        return self.df['log_vol_diff']
 
     def create_df_obj(self, data_slice):
-        return GarchFbmReturnForecast(data_slice)
+        return GarchFbmVolForecast(data_slice)
 
 def simulate_fbm(
         train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1000
