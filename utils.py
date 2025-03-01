@@ -4,6 +4,8 @@ import pandas as pd
 from hurst import compute_Hc
 from abc import ABC, abstractmethod
 from arch import arch_model
+from enum import Enum
+from scipy.stats import t
 
 """
 Common utility methods demonstrated below:
@@ -23,14 +25,11 @@ print(f'Next 5 days prediction: {next_day_pred}')
 snp_obj = utils.FbmReturnForecast(SNP)
 res_df = utils.apply_rolling_predictions_from_start(snp_obj, '2020-01-01', 150)
 res_df = res_df.join(SNP, how='inner')
-utils.compute_rmse(res_df, 'predicted', 'price')
+diagnostics.compute_rmse(res_df, 'predicted', 'price')
 """
 
-def compute_rmse(df, predicted_col_name, actual_col_name):
-    diff = df[predicted_col_name] - df[actual_col_name]
-    mse = np.mean(diff ** 2)
-    rmse = np.sqrt(mse)
-    return rmse
+SCALE_FACTOR = 100 # Scale factor for numerical stability for model fitting
+DEFAULT_NO_OF_MONTE_CARLO_SIMULATIONS = 1000
 
 class TimeSeriesDf(ABC):
     def __init__(self, df):
@@ -106,7 +105,7 @@ def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
     garch_model = arch_model(log_returns, vol='Garch', p=1, q=1)
     res = garch_model.fit(disp='off')
     conditional_volatilities = res.conditional_volatility
-    return conditional_volatilities[-1] / 100
+    return conditional_volatilities.iloc[-1] / SCALE_FACTOR
 
 class GarchFbmReturnForecast(TimeSeriesDf):
     """Implements the GARCH-fBM model for predicting log returns."""
@@ -114,13 +113,13 @@ class GarchFbmReturnForecast(TimeSeriesDf):
         return self.df['price'].iloc[-1]
     
     def get_mu(self):
-        return self.df['log_returns'].mean() / 100
+        return self.df['log_returns'].mean() / SCALE_FACTOR
     
     def get_sigma(self):
         return fit_garch_and_obtain_conditional_vol(self.df['log_returns'])
 
     def get_series_for_hurst(self):
-        return self.df['log_returns'] / 100
+        return self.df['log_returns'] / SCALE_FACTOR
 
     def create_df_obj(self, data_slice):
         return GarchFbmReturnForecast(data_slice)
@@ -131,19 +130,19 @@ class GarchFbmVolForecast(TimeSeriesDf):
         return self.df['vol'].iloc[-1]
     
     def get_mu(self):
-        return self.df['log_vol_diff'].mean() / 100
+        return self.df['log_vol_diff'].mean() / SCALE_FACTOR
     
     def get_sigma(self):
         return fit_garch_and_obtain_conditional_vol(self.df['log_vol_diff'])
 
     def get_series_for_hurst(self):
-        return self.df['log_vol_diff'] / 100
+        return self.df['log_vol_diff'] / SCALE_FACTOR
 
     def create_df_obj(self, data_slice):
         return GarchFbmVolForecast(data_slice)
 
 def simulate_fbm(
-        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1000
+        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=DEFAULT_NO_OF_MONTE_CARLO_SIMULATIONS
     ):
     # DF correction (account for day 0)
     time_points = n_days + 1 
@@ -254,4 +253,58 @@ def compute_log_returns(
     df[new_col_name] = np.log(df[predicted_col_name] / df[predicted_col_name].shift(1))
     df = df.dropna()
     df = df.join(original_df, how="inner")
+    return df
+
+class Distribution(Enum):
+    NORMAL = 'normal'
+    T = 't'
+
+def rolling_garch_price_forecast(
+    df: pd.DataFrame,
+    window: int = 250,
+    dist: Distribution = Distribution.NORMAL,
+) -> pd.DataFrame:
+    """Perform a rolling GARCH forecast to predict the next-day price and compute log returns."""
+
+    # Initialise columns for results
+    df['predicted_price'] = np.nan
+    df['predicted_log_return'] = np.nan
+    df['conditional_vol'] = np.nan
+    
+    for i in range(window, len(df)):
+        # Fit a GARCH(1,1) on the past `window` returns
+        rolling_slice = df.iloc[i-window:i]['log_returns']
+        
+        # Choose the distribution
+        if dist == Distribution.NORMAL:
+            am = arch_model(rolling_slice, mean='Zero', vol='GARCH', p=1, q=1, dist='normal')
+        elif dist == Distribution.T:
+            am = arch_model(rolling_slice, mean='Zero', vol='GARCH', p=1, q=1, dist='t')
+        
+        res = am.fit(disp='off')
+        
+        # Forecast next-day variance
+        fcast_var = res.forecast(horizon=1).variance.iloc[-1, 0] 
+        fcast_std = np.sqrt(fcast_var) / 100
+        
+        # Draw a shock
+        if dist == Distribution.NORMAL:
+            shock = np.random.randn()  # N(0,1)
+        elif dist == Distribution.T:
+            nu = res.params.get('nu', np.inf)
+            # Student-t random deviate, scaled for stdev=1
+            shock = t.rvs(df=nu) / np.sqrt(nu / (nu - 2))
+        
+        # Next-day log-return (from the GARCH volatility * random shock)
+        predicted_log_return = fcast_std * shock
+        
+        # Price_{t+1} = Price_t * exp( predicted_log_return )
+        # Last observed price is at index i-1
+        last_price = df.iloc[i-1]['price']
+        predicted_price = last_price * np.exp(predicted_log_return)
+        
+        # Store results
+        df.iloc[i, df.columns.get_loc('predicted_log_return')] = predicted_log_return
+        df.iloc[i, df.columns.get_loc('predicted_price')] = predicted_price
+        df.iloc[i, df.columns.get_loc('conditional_vol')] = fcast_std
     return df

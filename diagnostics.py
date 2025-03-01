@@ -114,3 +114,9 @@ def compute_hit_rate(predicted: pd.Series, actual: pd.Series) -> float:
     hit_rate = sign_match.mean()
     print(f"\nHit Rate: {hit_rate * 100:.2f}%")
     return hit_rate
+
+def compute_rmse(df, predicted_col_name, actual_col_name):
+    diff = df[predicted_col_name] - df[actual_col_name]
+    mse = np.mean(diff ** 2)
+    rmse = np.sqrt(mse)
+    return rmse
