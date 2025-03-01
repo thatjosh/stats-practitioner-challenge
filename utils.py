@@ -143,7 +143,7 @@ class GarchFbmVolForecast(TimeSeriesDf):
         return GarchFbmVolForecast(data_slice)
 
 def simulate_fbm(
-        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1
+        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1000
     ):
     # DF correction (account for day 0)
     time_points = n_days + 1 
