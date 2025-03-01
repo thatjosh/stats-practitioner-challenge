@@ -3,7 +3,7 @@ import numpy as np
 
 def preprocess_data(csv_path: str, qty: str, processed_qty: str) -> pd.DataFrame:
     """
-    Loads a CSV containing at least a Date column and a Price column,
+    Loads a CSV containing at least a Date column and a Price/Volatility column,
     sorts by Date (ascending), and computes log returns.
 
     qty: name of outcome variable, e.g. prices, 
