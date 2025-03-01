@@ -123,7 +123,7 @@ def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
     garch_model = arch_model(log_returns, vol='Garch', p=1, q=1)
     res = garch_model.fit(disp='off')
     conditional_volatilities = res.conditional_volatility
-    return conditional_volatilities[-1]
+    return conditional_volatilities[-1] / 100
 
 class GarchFbmReturnForecast(TimeSeriesDf):
     """Implements the GARCH-fBM model with S&P500 / NASDAQ data."""
@@ -131,13 +131,13 @@ class GarchFbmReturnForecast(TimeSeriesDf):
         return self.df['price'].iloc[-1]
     
     def get_mu(self):
-        return self.df['log_returns'].mean()
+        return self.df['log_returns'].mean() / 100
     
     def get_sigma(self):
         return fit_garch_and_obtain_conditional_vol(self.df['log_returns'])
 
     def get_series_for_hurst(self):
-        return self.df['log_returns']
+        return self.df['log_returns'] / 100
 
     def create_df_obj(self, data_slice):
         return GarchFbmReturnForecast(data_slice)
@@ -160,7 +160,7 @@ class GarchFbmVolForecast(TimeSeriesDf):
         return GarchFbmVolForecast(data_slice)
 
 def simulate_fbm(
-        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1000
+        train_data_obj: TimeSeriesDf, H: float, n_days=1, n_simulations=1
     ):
     # DF correction (account for day 0)
     time_points = n_days + 1 

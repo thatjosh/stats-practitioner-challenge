@@ -23,15 +23,15 @@ def rolling_garch_price_forecast(
         
         # Choose the distribution
         if dist == 'normal':
-            am = arch_model(rolling_slice, mean='Zero', vol='GARCH', p=1, q=1, dist='normal', rescale=False)
+            am = arch_model(rolling_slice, mean='Zero', vol='GARCH', p=1, q=1, dist='normal')
         else:
-            am = arch_model(rolling_slice, mean='Zero', vol='GARCH', p=1, q=1, dist='t', rescale=False)
+            am = arch_model(rolling_slice, mean='Zero', vol='GARCH', p=1, q=1, dist='t')
         
         res = am.fit(disp='off')
         
         # Forecast next-day variance
-        fcast_var = res.forecast(horizon=1).variance.iloc[-1, 0]
-        fcast_std = np.sqrt(fcast_var)
+        fcast_var = res.forecast(horizon=1).variance.iloc[-1, 0] 
+        fcast_std = np.sqrt(fcast_var) / 100
         
         # Draw a shock
         if dist == 'normal':
