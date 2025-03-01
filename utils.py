@@ -9,18 +9,18 @@ from arch import arch_model
 Common utility methods demonstrated below:
 
 #### 1. Predict 1 day ####
-vix_training_data_obj = utils.VixDf(vix_training_df)
+vix_training_data_obj = utils.FbmVolForecast(vix_training_df)
 next_day_pred = utils.simulate_fbm(vix_training_data_obj, 0.3, 1)
 print(f'Next day prediction: {next_day_pred}')
 
 #### 2. Predict 5 days ####
-vix_training_data_obj = utils.VixDf(vix_training_df)
+vix_training_data_obj = utils.FbmVolForecast(vix_training_df)
 utils.predict_with_fbm(vix_training_data_obj, 500, 5)
 print(f'Next 5 days prediction: {next_day_pred}')
 
 #### 3. Predict from a start date, for a number of days, and then computes RMSE ####
 # let SNP be a df that's given, it should contain the price/vol, and its associated logged counterparts
-snp_obj = utils.SnpDf(SNP)
+snp_obj = utils.FbmReturnForecast(SNP)
 res_df = utils.apply_rolling_predictions_from_start(snp_obj, '2020-01-01', 150)
 res_df = res_df.join(SNP, how='inner')
 utils.compute_rmse(res_df, 'predicted', 'price')
@@ -68,8 +68,8 @@ class TimeSeriesDf(ABC):
     def get_window_slice(self, window_size):
         return self.get_df().iloc[-window_size:]
 
-class VixDf(TimeSeriesDf):
-    """Implements the fBM model for S&P500 VIX data."""
+class FbmVolForecast(TimeSeriesDf):
+    """Implements the fBM model for predicting log returns on volatility."""
     def get_start_value(self):
         return self.df['vol'].iloc[-1]
     
@@ -83,10 +83,10 @@ class VixDf(TimeSeriesDf):
         return self.df['log_vol_diff']
 
     def create_df_obj(self, data_slice):
-        return VixDf(data_slice)
+        return FbmVolForecast(data_slice)
 
-class SnpDf(TimeSeriesDf):
-    """Implements the fBM model for S&P500 data."""
+class FbmReturnForecast(TimeSeriesDf):
+    """Implements the fBM model for predicting log returns."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
     
@@ -100,24 +100,7 @@ class SnpDf(TimeSeriesDf):
         return self.df['log_returns']
 
     def create_df_obj(self, data_slice):
-        return SnpDf(data_slice)
-
-class NasdaqDf(TimeSeriesDf):
-    """Implements the fBM model for Nasdaq data."""
-    def get_start_value(self):
-        return self.df['price'].iloc[-1]
-    
-    def get_mu(self):
-        return self.df['log_returns'].mean()
-    
-    def get_sigma(self):
-        return self.df['log_returns'].std()
-
-    def get_series_for_hurst(self):
-        return self.df['log_returns']
-
-    def create_df_obj(self, data_slice):
-        return NasdaqDf(data_slice)
+        return FbmReturnForecast(data_slice)
 
 def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
     garch_model = arch_model(log_returns, vol='Garch', p=1, q=1)
@@ -126,7 +109,7 @@ def fit_garch_and_obtain_conditional_vol(log_returns: pd.Series):
     return conditional_volatilities[-1] / 100
 
 class GarchFbmReturnForecast(TimeSeriesDf):
-    """Implements the GARCH-fBM model with S&P500 / NASDAQ data."""
+    """Implements the GARCH-fBM model for predicting log returns."""
     def get_start_value(self):
         return self.df['price'].iloc[-1]
     
@@ -143,18 +126,18 @@ class GarchFbmReturnForecast(TimeSeriesDf):
         return GarchFbmReturnForecast(data_slice)
     
 class GarchFbmVolForecast(TimeSeriesDf):
-    """Implements the GARCH-fBM model with S&P500 VIX data."""
+    """Implements the GARCH-fBM model for predicting log returns on volatility."""
     def get_start_value(self):
         return self.df['vol'].iloc[-1]
     
     def get_mu(self):
-        return self.df['log_vol_diff'].mean()
+        return self.df['log_vol_diff'].mean() / 100
     
     def get_sigma(self):
         return fit_garch_and_obtain_conditional_vol(self.df['log_vol_diff'])
 
     def get_series_for_hurst(self):
-        return self.df['log_vol_diff']
+        return self.df['log_vol_diff'] / 100
 
     def create_df_obj(self, data_slice):
         return GarchFbmVolForecast(data_slice)
@@ -237,7 +220,6 @@ def apply_rolling_predictions_from_start(
 
         # Convert predictions into DF and return it
         return pd.DataFrame({'predicted': predictions, 'conditional_vol': cond_vols}, index=pd.to_datetime(dates))
-
 
 def downscale_columns(df: pd.DataFrame, columns: list, scale_factor: float) -> pd.DataFrame:
     """Rescales specified columns in a DF by scale factor."""
