@@ -239,7 +239,7 @@ def apply_rolling_predictions_from_start(
         return pd.DataFrame({'predicted': predictions, 'conditional_vol': cond_vols}, index=pd.to_datetime(dates))
 
 
-def rescale_columns(df: pd.DataFrame, columns: list, scale_factor: float) -> pd.DataFrame:
+def downscale_columns(df: pd.DataFrame, columns: list, scale_factor: float) -> pd.DataFrame:
     """Rescales specified columns in a DF by scale factor."""
     df = df.copy()
     for col in columns:
@@ -247,4 +247,29 @@ def rescale_columns(df: pd.DataFrame, columns: list, scale_factor: float) -> pd.
             df[col] = df[col] / scale_factor
         else:
             print(f"Warning: Column '{col}' not found in DataFrame.")
+    return df
+
+def upscale_columns(df: pd.DataFrame, columns: list, scale_factor: float) -> pd.DataFrame:
+    """Rescales specified columns in a DF by scale factor."""
+    df = df.copy()
+    for col in columns:
+        if col in df.columns:
+            df[col] = df[col] * scale_factor
+        else:
+            print(f"Warning: Column '{col}' not found in DataFrame.")
+    return df
+
+def compute_log_returns(
+        predicted_df: pd.DataFrame,
+        original_df: pd.DataFrame,
+        predicted_col_name: str,
+        new_col_name: str,
+    ) -> pd.DataFrame:
+    """
+    Computes log returns for df from the predicted_col_name column and stores it in the new_col_name column.
+    """
+    df = predicted_df.copy()
+    df[new_col_name] = np.log(df[predicted_col_name] / df[predicted_col_name].shift(1))
+    df = df.dropna()
+    df = df.join(original_df, how="inner")
     return df

@@ -9,7 +9,7 @@ def preprocess_data(csv_path: str, qty: str, processed_qty: str) -> pd.DataFrame
     qty: name of outcome variable, e.g. prices, 
     processed_qty: name of processed outcome variable, e.g. log returns
     """
-    df = pd.read_csv(csv_path)
+    df = pd.read_csv(csv_path, skiprows=1)
     df.columns = ['date', qty]
     df['date'] = pd.to_datetime(df['date'])
 
