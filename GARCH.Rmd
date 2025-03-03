@@ -1,0 +1,1042 @@
+---
+title: "LSE Practitioners' Challenge"
+author: "Group 3"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(reshape2) 
+library(lubridate)
+library(gridExtra)
+library(zoo)
+library(tseries) 
+library(car) 
+library(moments)
+library(knitr)
+library(moments)
+library(knitr)
+library(quantmod)
+library(PerformanceAnalytics)
+library(timeSeries)
+library(roll)
+library(MASS)
+library(extraDistr)
+library(rugarch)
+library(QRM)
+library(kableExtra)
+library(ggplot2)
+```
+
+```{r loading and cleaning data,echo = FALSE}
+#------------------------- Cleaning Data ---------------------------------------
+# Function to Load and Process Data
+load_data <- function(file_path, price_col) {
+  data <- read.csv(file_path, header = TRUE)
+  
+  # Check if the first column is the date
+  if ("Date" %in% colnames(data)) {
+    data$Date <- ymd(data$Date) 
+  } else {
+    # If Date is the index, reset it
+    data <- data.frame(Date = rownames(data), coredata(data))
+    data$Date <- as.Date(data$Date)
+  }
+  
+  data <- data[order(data$Date), ]
+  
+  # Extract relevant columns
+  prices <- data[, c("Date", price_col)]
+  colnames(prices) <- c("date", "price")
+  
+  # Compute Simple Returns
+  n <- nrow(prices)
+  simple_returns <- numeric(n)
+  simple_returns[2:n] <- (prices$price[2:n] - prices$price[1:(n - 1)]) / prices$price[1:(n - 1)]
+  simple_returns[1] <- NA
+
+  # Compute Log Returns
+  log_returns <- numeric(n)
+  log_returns[2:n] <- log(1 + simple_returns[2:n])
+  log_returns[1] <- NA
+
+  # Add to DataFrame
+  prices$simple_returns <- simple_returns
+  prices$log_returns <- log_returns
+  prices <- prices[-1, ]  # Remove first row with NA
+  
+  return(prices)
+}
+
+# Load Data for Different Indices
+SNP <- load_data("/Users/harveymiller/Documents/LSE/Year_4/Studies/Practitioners' Challenge/S&P 500 Index.csv", "S.P.500.Index")
+NASDAQ <- load_data("/Users/harveymiller/Documents/LSE/Year_4/Studies/Practitioners' Challenge/NASDAQ Composite Index.csv", "NASDAQ.Composite.Index")
+VIX <- load_data("/Users/harveymiller/Documents/LSE/Year_4/Studies/Practitioners' Challenge/S&P 500 VIX.csv", "S.P.500.Volatility.Index..VIX.")
+```
+
+### S&P500
+
+## S&P500 Price & Returns Plot
+```{r, fig.width=20, fig.height=6, fig.align='center',echo=FALSE}
+# Convert log returns to zoo object
+Returns.ts <- zoo(SNP$log_returns, order.by = SNP$date)
+
+# Set up plotting area (1 row, 2 columns)
+par(mfrow = c(1, 2),    
+    cex.main = 2,    
+    cex.lab = 1.4,             
+    cex.axis = 1.2)  
+
+# Plot Price Series
+plot(SNP$date, 
+     SNP$price,   
+     type = "l", 
+     ylab = "Price", 
+     xlab = "Date", 
+     col = "blue", 
+     main = "Price Series",
+     xaxt = "n")
+axis.Date(1, at = seq(min(SNP$date), max(SNP$date), by = "1 year"), format = "%Y")
+
+# Plot Log Returns
+plot(index(Returns.ts), 
+     coredata(Returns.ts), 
+     type = 'l',
+     ylab = "Log Returns", 
+     xlab = "Date", 
+     col = "red", 
+     main = "Log Returns",
+     lwd = 1,
+     xaxt = "n")
+axis.Date(1, at = seq(min(SNP$date), max(SNP$date), by = "1 year"), format = "%Y")
+
+```
+
+## Summary Statitsics for S&P500
+
+```{r,echo = FALSE}
+# Compute summary statistics
+summary_stats = c(
+  mean(SNP$log_returns, na.rm = TRUE),
+  sd(SNP$log_returns, na.rm = TRUE),
+  min(SNP$log_returns, na.rm = TRUE),
+  max(SNP$log_returns, na.rm = TRUE),
+  skewness(SNP$log_returns, na.rm = TRUE),
+  kurtosis(SNP$log_returns, na.rm = TRUE),
+  jarque.bera.test(SNP$log_returns)$p.value,  # Extract p-value
+  Box.test(SNP$log_returns, type = "Ljung-Box")$p.value,  
+  Box.test(SNP$log_returns^2, type = "Ljung-Box")$p.value  
+)
+
+# Convert to data frame
+summary_stats_df <- data.frame(
+  Metric = c("Mean", "SD", "Min", "Max", "Skewness", "Kurtosis", 
+             "Jarque-Bera p-value", "Box-Ljung p-value", "Box-Ljung (squared) p-value"),
+  Value = summary_stats
+)
+
+# Format as markdown table
+kable(summary_stats_df, format = "markdown", digits = 4)
+
+# Identify extreme return dates
+min_return <- signif(min(SNP$log_returns, na.rm = TRUE) * 100, 2)
+max_return <- signif(max(SNP$log_returns, na.rm = TRUE) * 100, 2)
+
+# Print results
+cat("Minimum return:", min_return, "\n")
+cat("Maximum return:", max_return, "\n")
+cat("Skewness:", signif(skewness(SNP$log_returns, na.rm = TRUE), 2), "\n")
+cat("Kurtosis:", signif(kurtosis(SNP$log_returns, na.rm = TRUE), 2), "\n")
+
+acf(SNP$log_returns, main = "ACF of Log Returns", lag.max = 200)
+acf(SNP$log_returns^2, main = "ACF of Log Returns^2", lag.max = 200)
+
+```
+
+
+## GARCH Model Fit and In-Sample Diagnostics for S&P500
+
+```{r, echo = FALSE}
+# Specify the GARCH(1,1) model
+GARCH_1_1 <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(1, 0), include.mean = TRUE),  # AR(1) mean model
+  distribution.model = "norm"
+)
+
+# Residuals Analysis
+GARCH_1_1_fit <- ugarchfit(spec = GARCH_1_1, data = SNP$log_returns, solver = "hybrid")
+plot(GARCH_1_1_fit, which = 9)  # Standardized residuals are assumed to be normal in the model but not the case!
+
+
+# Extract standardized residuals
+std_residuals <- residuals(GARCH_1_1_fit, standardize = TRUE)
+
+# Normality test for further proof
+jarque.bera.test(std_residuals) # residuals are not normal, which violates assumption in garch, evidence to fit tGARCH
+
+
+# ACF and Box test of residuals
+acf(std_residuals, main = "ACF of Standardized Residuals") # this is good, as no autocorrelation present
+Box.test(std_residuals, lag = 10, type = "Ljung-Box")
+Box.test(std_residuals^2, lag = 10, type = "Ljung-Box")  # A significant p-value indicates that the model has not fully captured autocorrelation or volatility clustering.
+
+```
+
+## Out Of Sample Diagnostics for S&P500 (backtesting VaR and forecasting returns)
+```{r VaR Forecast S&P,echo=FALSE}
+#--------------------- GARCH Model Specification ---------------------
+garch_spec <- ugarchspec(
+  variance.model = list(garchOrder = c(1,1)), 
+  mean.model = list(armaOrder = c(0,0), include.mean = FALSE),
+  distribution.model = "norm"
+)
+
+# Initialize Variables
+VaR <- data.frame(date = SNP$date, price = SNP$price, log_returns = SNP$log_returns, GARCH = NA,forecasted_returns = NA)
+p <- 0.01  # 5% significance level
+WE <- 250  # Rolling window size
+
+#---------------------- Rolling GARCH Estimation ----------------------
+for (t in (WE+1):nrow(VaR)) {
+  t1 <- t - WE
+  t2 <- t - 1
+  
+  # Rolling window data
+  window=VaR$log_returns[t1:t2]
+  fit=ugarchfit(spec=garch_spec,data=window,solver = "hybrid")
+  
+  # we now forecast the conditional variance (T+1)
+  s2=coef(fit)[1] +
+    coef(fit)[2] * tail(window,1)^2 +
+    coef(fit)[3] *tail(fit@fit$var,1 )
+  VaR$GARCH[t]=-qnorm(p,sd = sqrt(s2))
+    
+  cat("Processed:", t, "\n")  # Track progress
+  
+  # Forecasted log return: ŷ_{t+1} = σ_{t+1} * z_{t+1}, z ~ N(0,1)
+  z_t1 <- rnorm(1)  # Draw a random standard normal shock
+  forecasted_return <- sqrt(s2) * z_t1
+  VaR$forecasted_returns[t] <- forecasted_return
+}
+
+```
+
+```{r plot,echo=FALSE}
+# Ensure date format is correct
+VaR$date <- as.Date(VaR$date)
+
+# Define range for plotting
+start_idx <- WE + 1
+end_idx <- nrow(VaR)
+
+# Plot VaR (red) vs. Actual Returns (blue)
+plot(VaR$date[start_idx:end_idx], -VaR$GARCH[start_idx:end_idx], 
+     type = "l", 
+     col = "red", 
+     ylab = "Returns ($)", 
+     xlab = "Date", 
+     main = "VaR(0.01) vs Returns (GARCH Model)", 
+     ylim =  c(-0.3,0.1),
+     lwd = 1)
+
+lines(VaR$date[start_idx:end_idx], VaR$log_returns[start_idx:end_idx], 
+      col = "blue", 
+      lwd = 1)
+
+# Add legend
+legend("bottomright", 
+       legend = c("VaR (0.01%) - GARCH", "Log Returns"), 
+       col = c("red", "blue"), 
+       lwd = c(2, 2),
+       cex = 1)
+
+
+# Calculate error metrics
+rmse <- sqrt(mean((VaR$log_returns[start_idx:end_idx] - VaR$forecasted_returns[start_idx:end_idx])^2))
+cat("\nRMSE:", rmse, "\n")
+
+# Hit rate
+valid_idx <- which(!is.na(VaR$log_returns) & !is.na(VaR$forecasted_returns))
+sign_match <- sign(VaR$forecasted_returns[valid_idx]) == sign(VaR$log_returns[valid_idx])
+hit_rate <- mean(sign_match)  
+cat("\nHit Rate:", round(hit_rate * 100, 2), "%\n")
+
+
+plot(VaR$date[start_idx:end_idx],VaR$log_returns[start_idx:end_idx], type = "l", col = "blue", 
+     main = "Actual vs. Forecasted Returns", xlab = "Date", ylab = "Returns")
+lines(VaR$date[start_idx:end_idx], VaR$forecasted_returns[start_idx:end_idx], col = "red")  
+legend("topright", legend = c("Actual Returns", "Forecasted Returns"), col = c("blue", "red"), lty = c(1,1))
+
+```
+
+```{r, echo = FALSE}
+V_GARCH=-VaR[251:2265,4]- VaR[251:2265,3] #var-returns
+
+V_GARCH[V_GARCH<0]=0  # checks each element of the vector V and if an element is less than 0, it is replaced with 0.
+V_GARCH[V_GARCH>0]=1  # checks each element of the vector V and if an element is greater than 0, it is replaced with 1.
+
+V_GARCH=sum(V_GARCH)/(2264*0.01) 
+```
+
+Significantly underestimates risk, as VR ratio is 2.12
+
+```{r Coverage Test S&P, echo = FALSE}
+ra <- VaR[251:dim(VaR)[1],3]
+VaRa <- VaR[251:dim(VaR)[1],"GARCH"]
+eta <- ra < - VaRa # returns true (1) if ra < - VaRa holds, false otherwise (0)
+v1 <- sum(eta)
+v0 <- length(eta) - v1
+picap <- v1 / (v1 + v0)
+
+a <- (1 - p)^v0 * p^v1 # likelihood of restricted model
+b <- (1 - picap)^v0 * picap^v1 # likelihood of unrestricted model
+
+LR <- 2 * (log(b / a))
+LR
+
+if (LR > qchisq(p = 1 - p, df = 1)) {
+  print('null hypothesis H0 is rejected')
+} else {
+  print('We cannot reject the null')
+}
+```
+
+Following likelihood ratio test, for VaR(0.01) we can conclude that there is sufficient evidence to reject the null hypothesis that violations are bernoulli iid with probability 0.01 - not good!
+
+## tGARCH Model Fit and In-Sample Diagnostics for S&P500
+
+```{r in sample analysis S&P tGARCH, echo =FALSE}
+
+# Specify the tGARCH(1,1) model
+tGARCH_1_1 <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
+  distribution.model = "std"  # t-distributed residuals
+)
+
+# Fit the model to log returns
+tGARCH_1_1_fit <- ugarchfit(spec = tGARCH_1_1, data = SNP$log_returns, solver = "hybrid")
+plot(tGARCH_1_1_fit, which = 9)  # Standardized residuals are assumed to be normal in the model but not the case!
+
+
+# Extract standardized residuals
+std_residuals <- residuals(tGARCH_1_1_fit, standardize = TRUE)
+
+# Normality test for further proof
+jarque.bera.test(std_residuals) # residuals are not normal, which violates assumption in garch, evidence to fit tGARCH
+
+
+# ACF and Box test of residuals
+acf(std_residuals, main = "ACF of Standardized Residuals") # this is good, as no autocorrelation present
+Box.test(std_residuals, lag = 10, type = "Ljung-Box")
+Box.test(std_residuals^2, lag = 10, type = "Ljung-Box")  # A significant p-value indicates that the model has not fully captured autocorrelation or volatility clustering.
+
+```
+## tGARCH Model Out-Of-Sample Diagnostics for S&P500 (backtesting VaR and forecasting returns)
+
+```{r out of sample S&P tGARCH, echo = FALSE}
+# tGARCH Model Specification
+tGARCH_spec <- ugarchspec(
+  variance.model = list(garchOrder = c(1,1)), 
+  mean.model = list(armaOrder = c(0,0), include.mean = FALSE),
+  distribution.model = "std"
+)
+
+# Initialize DataFrame for VaR
+VaR_t <- data.frame(date = SNP$date, price = SNP$price, log_returns = SNP$log_returns, tGARCH = NA,forecasted_returns = NA)
+p <- 0.01  # 1% significance level
+WE <- 250  # Rolling window size
+
+# Rolling tGARCH Estimation
+for (t in (WE+1):nrow(VaR_t)) {
+  t1 <- t - WE
+  t2 <- t - 1
+
+  # Rolling window data
+  window <- VaR_t$log_returns[t1:t2]
+
+  # Check for NAs
+  if (any(is.na(window))) {
+    cat("Skipping iteration", t, "- NA values detected in window.\n")
+    next
+  }
+
+  # Fit GARCH model with error handling
+  fit <- tryCatch(
+    ugarchfit(spec = tGARCH_spec, data = window, solver = "hybrid", fit.control = list(scale = 1)),
+    error = function(e) {
+      cat("GARCH model failed at iteration", t, "-", e$message, "\n")
+      return(NULL)
+    }
+  )
+  if (is.null(fit)) next
+
+  # Extract Coefficients Safely
+  coefs <- tryCatch(coef(fit), error = function(e) NULL)
+  if (is.null(coefs) || length(coefs) < 3) {
+    cat("Skipping iteration", t, "- coefficient extraction failed.\n")
+    next
+  }
+
+  # Forecasting conditional variance (T+1)
+  s2 <- coefs[1] + coefs[2] * tail(window,1)^2 + coefs[3] * tail(fit@fit$var,1)
+
+  # Extract shape parameter safely
+  shape_param <- tryCatch(coefs["shape"], error = function(e) NA)
+  if (is.na(shape_param) || shape_param <= 2) {
+    cat("Skipping iteration", t, "- invalid shape parameter.\n")
+    next
+  }
+
+  # Compute VaR
+  VaR_t$tGARCH[t] <- -sqrt(s2) * qt(p, df = shape_param) * sqrt((shape_param-2)/(shape_param))
+  cat("Processed:", t, "\n")
+  
+    # Forecasted log return: ŷ_{t+1} = σ_{t+1} * z_{t+1}, z ~ N(0,1)
+  z_t1 <- rt(1,df = shape_param)/ sqrt(shape_param / (shape_param - 2)) 
+  forecasted_return <- sqrt(s2) * z_t1
+  VaR_t$forecasted_returns[t] <- forecasted_return
+}
+
+# Ensure date format is correct
+VaR_t$date <- as.Date(VaR_t$date)
+
+# Define range for plotting
+start_idx <- WE + 1
+end_idx <- nrow(VaR_t)
+
+# Plot VaR (red) vs. Actual Returns (blue)
+plot(VaR_t$date[start_idx:end_idx], -VaR_t$tGARCH[start_idx:end_idx], 
+     type = "l", col = "red", 
+     ylab = "Returns ($)", 
+     xlab = "Date", 
+     main = "VaR vs Returns (tGARCH Model)", 
+     ylim = c(-0.3, 0.1),
+     lwd = 1)
+
+lines(VaR_t$date[start_idx:end_idx], VaR_t$log_returns[start_idx:end_idx], 
+      col = "blue", lwd = 1)
+
+# Add legend
+legend("bottomright", 
+       legend = c("VaR (1%) - tGARCH", "Log Returns"), 
+       col = c("red", "blue"), 
+       lwd = c(2, 2),
+       cex = 1)
+
+
+valid_idx <- which(!is.na(VaR_t$log_returns[start_idx:end_idx]) & !is.na(VaR_t$forecasted_returns[start_idx:end_idx]))
+rmse <- sqrt(mean((VaR_t$log_returns[start_idx:end_idx][valid_idx] - VaR_t$forecasted_returns[start_idx:end_idx][valid_idx])^2))
+cat("\nRMSE:", rmse, "\n")
+
+sign_match <- sign(VaR_t$forecasted_returns[start_idx:end_idx][valid_idx]) == sign(VaR_t$log_returns[start_idx:end_idx][valid_idx])
+hit_rate <- mean(sign_match)  
+cat("\nHit Rate:", round(hit_rate * 100, 2), "%\n")
+
+plot(VaR_t$date[start_idx:end_idx],VaR_t$log_returns[start_idx:end_idx], type = "l", col = "blue", 
+     main = "Actual vs. Forecasted Returns", xlab = "Date", ylab = "Returns")
+lines(VaR_t$date[start_idx:end_idx], VaR_t$forecasted_returns[start_idx:end_idx], col = "red")  
+legend("topright", legend = c("Actual Returns", "Forecasted Returns"), col = c("blue", "red"), lty = c(1,1))
+
+```
+
+```{r}
+# Extract relevant data
+VaR_subset <- VaR_t[251:2265, c(3, 4)]  # Select log_returns (col 3) and tGARCH (col 4)
+VaR_subset <- na.omit(VaR_subset)
+
+# Compute V_tGARCH only on non-NA values
+V_tGARCH <- -VaR_subset[, 2] - VaR_subset[, 1]  # VaR - returns
+V_tGARCH[V_tGARCH < 0] <- 0  # If negative, replace with 0
+V_tGARCH[V_tGARCH > 0] <- 1  # If positive, replace with 1
+VR_tGARCH <- sum(V_tGARCH) / (nrow(VaR_subset) * 0.01)  
+
+cat("Violation Ratio (VR_tGARCH):", VR_tGARCH, "\n")
+
+# Coverage Test
+ra_t <- VaR_t[251:nrow(VaR_t), 3]
+VaRa_t <- VaR_t[251:nrow(VaR_t), "tGARCH"]
+
+# Remove NAs
+valid_idx <- !is.na(ra_t) & !is.na(VaRa_t)
+ra_t <- ra_t[valid_idx]
+VaRa_t <- VaRa_t[valid_idx]
+
+# Indicator function
+eta_t <- ra_t < -VaRa_t
+
+# Compute v1_t, v0_t, and picap_t
+v1_t <- sum(eta_t)
+v0_t <- length(eta_t) - v1_t
+picap_t <- v1_t / (v1_t + v0_t)
+
+
+a_t <- (1 - p)^v0_t * p^v1_t  # Likelihood of restricted model
+b_t <- (1 - picap_t)^v0_t * picap_t^v1_t  # Likelihood of unrestricted model
+
+LR_t <- 2 * (log(b_t / a_t))
+LR_t
+
+if (LR_t > qchisq(p = 1 - p, df = 1)) {
+  print("Null hypothesis H0 is rejected")
+} else {
+  print("We cannot reject the null")
+}
+
+```
+
+
+violation ratio more acceptable, test statistic also much lower which is good. tGARCH is better model.
+
+### VIX 
+
+## VIX Price & Returns
+```{r, fig.width=20, fig.height=6, fig.align='center',echo=FALSE}
+Returns.ts <- zoo(VIX$log_returns, order.by = VIX$date)
+par(mfrow = c(1, 2), cex.main = 2, cex.lab = 1.4, cex.axis = 1.2)
+plot(VIX$date, VIX$price, type = "l", col = "blue", main = "VIX Price Series", xaxt = "n")
+axis.Date(1, at = seq(min(VIX$date), max(VIX$date), by = "1 year"), format = "%Y")
+plot(index(Returns.ts), coredata(Returns.ts), type = 'l', col = "red", main = "VIX Log Returns", lwd = 1, xaxt = "n")
+axis.Date(1, at = seq(min(VIX$date), max(VIX$date), by = "1 year"), format = "%Y")
+```
+
+## Summary Statistics for VIX
+```{r,echo = FALSE}
+summary_stats_vix = c(
+  mean(VIX$log_returns, na.rm = TRUE),
+  sd(VIX$log_returns, na.rm = TRUE),
+  skewness(VIX$log_returns, na.rm = TRUE),
+  kurtosis(VIX$log_returns, na.rm = TRUE),
+  jarque.bera.test(VIX$log_returns)$p.value,
+  Box.test(VIX$log_returns, type = "Ljung-Box")$p.value
+)
+summary_stats_df_vix <- data.frame(
+  Metric = c("Mean", "SD", "Skewness", "Kurtosis", "Jarque-Bera p-value", "Box-Ljung p-value"),
+  Value = summary_stats_vix
+)
+kable(summary_stats_df_vix, format = "markdown", digits = 4)
+```
+
+## GARCH Model Fit for VIX and In-Sample Diagnostics
+```{r, echo = FALSE}
+# Specify the GARCH(1,1) model
+GARCH_1_1_VIX <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
+  distribution.model = "norm"  # Assuming normal distribution for residuals
+)
+
+# Fit the model to log returns
+GARCH_1_1_fit_VIX <- ugarchfit(spec = GARCH_1_1_VIX, data = VIX$log_returns, solver = "hybrid")
+
+plot(GARCH_1_1_fit_VIX, which = 9)  # Standardized residuals
+
+# Extract standardized residuals
+std_residuals <- residuals(GARCH_1_1_fit_VIX, standardize = TRUE)
+
+# Normality test for further proof
+jarque.bera.test(std_residuals) # residuals are not normal, which violates assumption in garch, evidence to fit tGARCH
+
+
+# ACF and Box test of residuals
+acf(std_residuals, main = "ACF of Standardized Residuals") # this is good, as no autocorrelation present
+Box.test(std_residuals, lag = 10, type = "Ljung-Box")
+Box.test(std_residuals^2, lag = 10, type = "Ljung-Box")  # A significant p-value indicates that the model has not fully captured autocorrelation or volatility clustering.
+
+```
+
+## Out-of-Sample Diagnostics for VIX (backtesting VaR and forecasting returns)
+```{r VaR Forecast,echo=FALSE}
+#--------------------- GARCH Model Specification ---------------------
+garch_spec_VIX <- ugarchspec(
+  variance.model = list(garchOrder = c(1,1)), 
+  mean.model = list(armaOrder = c(0,0), include.mean = FALSE),
+  distribution.model = "norm"
+)
+
+# Initialize Variables
+VaR_VIX <- data.frame(date = VIX$date, price = VIX$price, log_returns = VIX$log_returns, GARCH_VaR = NA,forecasted_returns = NA)
+p <- 0.01  # 1% significance level
+WE <- 250  # Rolling window size
+
+#---------------------- Rolling GARCH Estimation ----------------------
+for (t in (WE+1):nrow(VaR_VIX)) {
+  t1 <- t - WE
+  t2 <- t - 1
+  
+  # Rolling window data
+  window_returns <- VaR_VIX$log_returns[t1:t2]
+  
+  # Fit GARCH(1,1)
+  garch_fit_VIX <- ugarchfit(spec = garch_spec_VIX, data = window_returns, solver = 'hybrid')
+  
+  # we now forecast the conditional variance (T+1)
+  s2=coef(garch_fit_VIX)[1] +
+    coef(garch_fit_VIX)[2] * tail(window_returns,1)^2 +
+    coef(garch_fit_VIX)[3] *tail(garch_fit_VIX@fit$var,1 )
+
+  # Compute VaR
+  VaR_VIX$GARCH_VaR[t] <- -qnorm(p,sd = sqrt(s2))  # VaR at 1%
+  cat("Processed:", t, "\n")  # Track progress
+  
+  # Forecasted log return: ŷ_{t+1} = σ_{t+1} * z_{t+1}, z ~ N(0,1)
+  z_t1 <- rnorm(1)  # Draw a random standard normal shock
+  forecasted_return <- sqrt(s2) * z_t1
+  VaR_VIX$forecasted_returns[t] <- forecasted_return
+}
+
+
+```
+
+```{r,echo=FALSE}
+# Ensure date format is correct
+VaR_VIX$date <- as.Date(VaR_VIX$date)
+
+# Define range for plotting
+start_idx <- WE + 1
+end_idx <- nrow(VaR_VIX)
+
+# Plot VaR (red) vs. Actual Returns (blue)
+plot(VaR_VIX$date[start_idx:end_idx], -VaR_VIX$GARCH_VaR[start_idx:end_idx], 
+     type = "l", 
+     col = "red", 
+     ylab = "Returns ($)", 
+     xlab = "Date", 
+     main = "VaR vs Returns (GARCH Model for VIX)", 
+     ylim = c(-1.3,1.5),
+     lwd = 1)
+
+lines(VaR_VIX$date[start_idx:end_idx], VaR_VIX$log_returns[start_idx:end_idx], 
+      col = "blue", 
+      lwd = 1)
+
+# Add legend
+legend("bottomright", 
+       legend = c("VaR (0.01%) - GARCH", "Log Returns"), 
+       col = c("red", "blue"), 
+       lwd = c(2, 2),
+       cex = 1)
+
+
+# Calculate error metrics
+rmse <- sqrt(mean((VaR_VIX$log_returns[start_idx:end_idx] - VaR_VIX$forecasted_returns[start_idx:end_idx])^2))
+cat("\nRMSE:", rmse, "\n")
+
+valid_idx <- which(!is.na(VaR_VIX$log_returns[start_idx:end_idx]) & !is.na(VaR_VIX$forecasted_returns[start_idx:end_idx]))
+sign_match <- sign(VaR_VIX$forecasted_returns[start_idx:end_idx][valid_idx]) == sign(VaR_VIX$log_returns[start_idx:end_idx][valid_idx])
+hit_rate <- mean(sign_match)  
+cat("\nHit Rate:", round(hit_rate * 100, 2), "%\n")
+
+plot(VaR_VIX$date[start_idx:end_idx],VaR_VIX$log_returns[start_idx:end_idx], type = "l", col = "blue", 
+     main = "Actual vs. Forecasted Returns", xlab = "Date", ylab = "Returns",ylim = c(-1,1))
+lines(VaR_VIX$date[start_idx:end_idx], VaR_VIX$forecasted_returns[start_idx:end_idx], col = "red")  
+legend("bottomright", legend = c("Actual Returns", "Forecasted Returns"), col = c("blue", "red"), lty = c(1,1))
+
+```
+
+```{r, echo = FALSE}
+V_GARCH_VIX = -VaR_VIX[251:2265,4] - VaR_VIX[251:2265,3] #var-returns
+
+V_GARCH_VIX[V_GARCH_VIX<0] = 0  # If element < 0, replace with 0
+V_GARCH_VIX[V_GARCH_VIX>0] = 1  # If element > 0, replace with 1
+
+V_GARCH_VIX = sum(V_GARCH_VIX)/(2264*0.01) 
+V_GARCH_VIX
+
+# Coverage Test
+ra_t <- VaR_VIX[251:nrow(VaR_t), 3]
+VaRa_t <- VaR_VIX[251:nrow(VaR_t), "GARCH_VaR"]
+
+# Remove NAs
+valid_idx <- !is.na(ra_t) & !is.na(VaRa_t)
+ra_t <- ra_t[valid_idx]
+VaRa_t <- VaRa_t[valid_idx]
+
+# Indicator function
+eta_t <- ra_t < -VaRa_t
+
+# Compute v1_t, v0_t, and picap_t
+v1_t <- sum(eta_t)
+v0_t <- length(eta_t) - v1_t
+picap_t <- v1_t / (v1_t + v0_t)
+
+
+a_t <- (1 - p)^v0_t * p^v1_t  # Likelihood of restricted model
+b_t <- (1 - picap_t)^v0_t * picap_t^v1_t  # Likelihood of unrestricted model
+
+LR_t <- 2 * (log(b_t / a_t))
+LR_t
+
+if (LR_t > qchisq(p = 1 - p, df = 1)) {
+  print("Null hypothesis H0 is rejected")
+} else {
+  print("We cannot reject the null")
+}
+
+```
+
+
+### NASDAQ 
+
+## NASDAQ Price & Returns
+```{r, fig.width=20, fig.height=6, fig.align='center',echo=FALSE}
+Returns.ts <- zoo(NASDAQ$log_returns, order.by = NASDAQ$date)
+par(mfrow = c(1, 2), cex.main = 2, cex.lab = 1.4, cex.axis = 1.2)
+plot(NASDAQ$date, NASDAQ$price, type = "l", col = "blue", main = "NASDAQ Price Series", xaxt = "n")
+axis.Date(1, at = seq(min(NASDAQ$date), max(NASDAQ$date), by = "1 year"), format = "%Y")
+plot(index(Returns.ts), coredata(Returns.ts), type = 'l', col = "red", main = "NASDAQ Log Returns", lwd = 1, xaxt = "n")
+axis.Date(1, at = seq(min(NASDAQ$date), max(NASDAQ$date), by = "1 year"), format = "%Y")
+```
+## Summary Statistics for NASDAQ
+
+```{r, echo = FALSE}
+summary_stats_nasdaq = c(
+  mean(NASDAQ$log_returns, na.rm = TRUE),
+  sd(NASDAQ$log_returns, na.rm = TRUE),
+  skewness(NASDAQ$log_returns, na.rm = TRUE),
+  kurtosis(NASDAQ$log_returns, na.rm = TRUE),
+  jarque.bera.test(NASDAQ$log_returns)$p.value,
+  Box.test(NASDAQ$log_returns, type = "Ljung-Box")$p.value
+)
+summary_stats_df_nasdaq <- data.frame(
+  Metric = c("Mean", "SD", "Skewness", "Kurtosis", "Jarque-Bera p-value", "Box-Ljung p-value"),
+  Value = summary_stats_nasdaq
+)
+kable(summary_stats_df_nasdaq, format = "markdown", digits = 4)
+
+```
+## GARCH Model Fit and In-Sample Diagnostics for NASDAQ
+
+```{r, echo = FALSE}
+# Specify the GARCH(1,1) model
+GARCH_1_1_NASDAQ <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
+  distribution.model = "norm"
+)
+
+# Fit the model to log returns
+GARCH_1_1_fit_NASDAQ <- ugarchfit(spec = GARCH_1_1_NASDAQ, data = NASDAQ$log_returns, solver = "hybrid")
+
+plot(GARCH_1_1_fit_NASDAQ, which = 9)  # Standardized residuals
+
+# Extract standardized residuals
+std_residuals <- residuals(GARCH_1_1_fit_NASDAQ, standardize = TRUE)
+
+# Normality test for further proof
+jarque.bera.test(std_residuals) # residuals are not normal, which violates assumption in garch, evidence to fit tGARCH
+
+
+# ACF and Box test of residuals
+acf(std_residuals, main = "ACF of Standardized Residuals") # this is good, as no autocorrelation present
+Box.test(std_residuals, lag = 10, type = "Ljung-Box")
+Box.test(std_residuals^2, lag = 10, type = "Ljung-Box")  # A significant p-value indicates that the model has not fully captured autocorrelation or volatility clustering.
+
+```
+## Out Of Sample Diagnostics for NASDAQ (backtesting VaR and forecasting returns)
+
+```{r, echo = FALSE}
+#--------------------- GARCH Model Specification ---------------------
+garch_spec_NASDAQ <- ugarchspec(
+  variance.model = list(garchOrder = c(1,1)), 
+  mean.model = list(armaOrder = c(0,0), include.mean = FALSE),
+  distribution.model = "norm"
+)
+
+# Initialize Variables
+VaR_NASDAQ <- data.frame(date = NASDAQ$date, price = NASDAQ$price, log_returns = NASDAQ$log_returns, GARCH_VaR = NA,forecasted_returns = NA)
+p <- 0.01  # 1% significance level
+WE <- 250  # Rolling window size
+
+#---------------------- Rolling GARCH Estimation ----------------------
+for (t in (WE+1):nrow(VaR_NASDAQ)) {
+  t1 <- t - WE
+  t2 <- t - 1
+  
+  # Rolling window data
+  window_returns <- VaR_NASDAQ$log_returns[t1:t2]
+  
+  # Fit GARCH(1,1)
+  garch_fit_NASDAQ <- ugarchfit(spec = garch_spec_NASDAQ, data = window_returns, solver = 'hybrid')
+  
+  # we now forecast the conditional variance (T+1)
+  s2=coef(garch_fit_NASDAQ)[1] +
+    coef(garch_fit_NASDAQ)[2] * tail(window_returns,1)^2 +
+    coef(garch_fit_NASDAQ)[3] *tail(garch_fit_NASDAQ@fit$var,1 )
+
+  # Compute VaR
+  VaR_NASDAQ$GARCH_VaR[t] <- -qnorm(p,sd = sqrt(s2))  # VaR at 1%
+  cat("Processed:", t, "\n")  # Track progress
+  
+  # Forecasted log return: ŷ_{t+1} = σ_{t+1} * z_{t+1}, z ~ N(0,1)
+  z_t1 <- rnorm(1)  # Draw a random standard normal shock
+  forecasted_return <- sqrt(s2) * z_t1
+  VaR_NASDAQ$forecasted_returns[t] <- forecasted_return
+}
+
+```
+
+
+```{r, echo = FASLE}
+# Ensure date format is correct
+VaR_NASDAQ$date <- as.Date(VaR_NASDAQ$date)
+
+# Define range for plotting
+start_idx <- WE + 1
+end_idx <- nrow(VaR_NASDAQ)
+
+# Plot VaR (red) vs. Actual Returns (blue)
+plot(VaR_NASDAQ$date[start_idx:end_idx], -VaR_NASDAQ$GARCH_VaR[start_idx:end_idx], 
+     type = "l", 
+     col = "red", 
+     ylab = "Returns ($)", 
+     xlab = "Date", 
+     main = "VaR vs Returns (GARCH Model for NASDAQ)", 
+     ylim = c(-0.3,0.3),
+     lwd = 1)
+
+lines(VaR_NASDAQ$date[start_idx:end_idx], VaR_NASDAQ$log_returns[start_idx:end_idx], 
+      col = "blue", 
+      lwd = 1)
+
+# Add legend
+legend("bottomright", 
+       legend = c("VaR (0.01%) - GARCH", "Log Returns"), 
+       col = c("red", "blue"), 
+       lwd = c(2, 2),
+       cex = 1)
+
+# Calculate error metrics
+rmse <- sqrt(mean((VaR_NASDAQ$log_returns[start_idx:end_idx] - VaR_NASDAQ$forecasted_returns[start_idx:end_idx])^2))
+cat("\nRMSE:", rmse, "\n")
+
+valid_idx <- which(!is.na(VaR_NASDAQ$log_returns[start_idx:end_idx]) & !is.na(VaR_NASDAQ$forecasted_returns[start_idx:end_idx]))
+sign_match <- sign(VaR_NASDAQ$forecasted_returns[start_idx:end_idx][valid_idx]) == sign(VaR_NASDAQ$log_returns[start_idx:end_idx][valid_idx])
+hit_rate <- mean(sign_match)  
+cat("\nHit Rate:", round(hit_rate * 100, 2), "%\n")
+
+plot(VaR_NASDAQ$date[start_idx:end_idx],VaR_NASDAQ$log_returns[start_idx:end_idx], type = "l", col = "blue", 
+     main = "Actual vs. Forecasted Returns", xlab = "Date", ylab = "Returns")
+lines(VaR_NASDAQ$date[start_idx:end_idx], VaR_NASDAQ$forecasted_returns[start_idx:end_idx], col = "red")  
+legend("bottomright", legend = c("Actual Returns", "Forecasted Returns"), col = c("blue", "red"), lty = c(1,1))
+
+
+```
+
+```{r, echo = FALSE}
+V_GARCH_NASDAQ = -VaR_NASDAQ[251:2265,4] - VaR_NASDAQ[251:2265,3] #var-returns
+
+V_GARCH_NASDAQ[V_GARCH_NASDAQ<0] = 0  # If element < 0, replace with 0
+V_GARCH_NASDAQ[V_GARCH_NASDAQ>0] = 1  # If element > 0, replace with 1
+
+V_GARCH_NASDAQ = sum(V_GARCH_NASDAQ)/(2264*0.01) 
+V_GARCH_NASDAQ
+
+ra <- VaR_NASDAQ[251:dim(VaR_NASDAQ)[1],3]
+VaRa <- VaR_NASDAQ[251:dim(VaR_NASDAQ)[1],"GARCH_VaR"]
+eta <- ra < - VaRa # returns true (1) if ra < - VaRa holds, false otherwise (0)
+v1 <- sum(eta)
+v0 <- length(eta) - v1
+picap <- v1 / (v1 + v0)
+
+a <- (1 - p)^v0 * p^v1 # likelihood of restricted model
+b <- (1 - picap)^v0 * picap^v1 # likelihood of unrestricted model
+
+LR <- 2 * (log(b / a))
+LR
+
+if (LR > qchisq(p = 1 - p, df = 1)) {
+  print('null hypothesis H0 is rejected')
+} else {
+  print('We cannot reject the null')
+}
+```
+
+## tGARCH Model Fit and In-Sample Diagnostics for NASDAQ
+
+```{r in sample analysis, echo =FALSE}
+
+# Specify the tGARCH(1,1) model
+tGARCH_1_1 <- ugarchspec(
+  variance.model = list(model = "sGARCH", garchOrder = c(1, 1)),
+  mean.model = list(armaOrder = c(0, 0), include.mean = FALSE),
+  distribution.model = "std"  # t-distributed residuals
+)
+
+# Fit the model to log returns
+tGARCH_1_1_fit <- ugarchfit(spec = tGARCH_1_1, data = NASDAQ$log_returns, solver = "hybrid")
+
+# Plot conditional standard deviation (volatility)
+plot(tGARCH_1_1_fit, which = 3)
+
+# Plot standardized residuals
+plot(tGARCH_1_1_fit, which = 9)
+
+std_residuals <- residuals(tGARCH_1_1_fit, standardize = TRUE)
+
+# Normality test for further proof
+jarque.bera.test(std_residuals) # residuals are not normal, which violates assumption in garch, evidence to fit tGARCH
+
+
+# ACF and Box test of residuals
+acf(std_residuals, main = "ACF of Standardized Residuals") # this is good, as no autocorrelation present
+Box.test(std_residuals, lag = 10, type = "Ljung-Box")
+Box.test(std_residuals^2, lag = 10, type = "Ljung-Box")  # A significant p-value indicates that the model has not fully captured autocorrelation or volatility clustering.
+
+```
+## tGARCH Model Out-Of-Sample Diagnostics for NASDAQ (backtesting VaR and forecasting returns)
+
+```{r out of sample, echo = FALSE}
+# tGARCH Model Specification
+tGARCH_spec <- ugarchspec(
+  variance.model = list(garchOrder = c(1,1)), 
+  mean.model = list(armaOrder = c(0,0), include.mean = FALSE),
+  distribution.model = "std"
+)
+
+# Initialize DataFrame for VaR
+VaR_t_NASDAQ <- data.frame(date = NASDAQ$date, price = NASDAQ$price, log_returns = NASDAQ$log_returns, tGARCH = NA, forecasted_returns = NA)
+p <- 0.01  # 1% significance level
+WE <- 250  # Rolling window size
+
+# Rolling tGARCH Estimation
+for (t in (WE+1):nrow(VaR_t_NASDAQ)) {
+  t1 <- t - WE
+  t2 <- t - 1
+
+  # Rolling window data
+  window <- VaR_t_NASDAQ$log_returns[t1:t2]
+
+  # Check for NAs
+  if (any(is.na(window))) {
+    cat("Skipping iteration", t, "- NA values detected in window.\n")
+    next
+  }
+
+  # Fit GARCH model with error handling
+  fit <- tryCatch(
+    ugarchfit(spec = tGARCH_spec, data = window, solver = "hybrid", fit.control = list(scale = 1)),
+    error = function(e) {
+      cat("GARCH model failed at iteration", t, "-", e$message, "\n")
+      return(NULL)
+    }
+  )
+  if (is.null(fit)) next
+
+  # Extract Coefficients Safely
+  coefs <- tryCatch(coef(fit), error = function(e) NULL)
+  if (is.null(coefs) || length(coefs) < 3) {
+    cat("Skipping iteration", t, "- coefficient extraction failed.\n")
+    next
+  }
+
+  # Forecasting conditional variance (T+1)
+  s2 <- coefs[1] + coefs[2] * tail(window,1)^2 + coefs[3] * tail(fit@fit$var,1)
+
+  # Extract shape parameter safely
+  shape_param <- tryCatch(coefs["shape"], error = function(e) NA)
+  if (is.na(shape_param) || shape_param <= 2) {
+    cat("Skipping iteration", t, "- invalid shape parameter.\n")
+    next
+  }
+
+  # Compute VaR
+  VaR_t_NASDAQ$tGARCH[t] <- -sqrt(s2) * qt(p, df = shape_param) * sqrt((shape_param-2)/(shape_param))
+  cat("Processed:", t, "\n")
+  
+  # Forecasted log return: ŷ_{t+1} = σ_{t+1} * z_{t+1}, z ~ N(0,1)
+  z_t1 <- rt(1,df = shape_param)/ sqrt(shape_param / (shape_param - 2)) 
+  forecasted_return <- sqrt(s2) * z_t1
+  VaR_t_NASDAQ$forecasted_returns[t] <- forecasted_return
+}
+
+# Ensure date format is correct
+VaR_t_NASDAQ$date <- as.Date(VaR_t_NASDAQ$date)
+
+# Define range for plotting
+start_idx <- WE + 1
+end_idx <- nrow(VaR_t_NASDAQ)
+
+# Plot VaR (red) vs. Actual Returns (blue)
+plot(VaR_t_NASDAQ$date[start_idx:end_idx], -VaR_t_NASDAQ$tGARCH[start_idx:end_idx], 
+     type = "l", col = "red", 
+     ylab = "Returns ($)", 
+     xlab = "Date", 
+     main = "VaR vs Returns (tGARCH Model)", 
+     ylim = c(-0.3, 0.1),
+     lwd = 1)
+
+lines(VaR_t_NASDAQ$date[start_idx:end_idx], VaR_t_NASDAQ$log_returns[start_idx:end_idx], 
+      col = "blue", lwd = 1)
+
+# Add legend
+legend("bottomright", 
+       legend = c("VaR (1%) - tGARCH", "Log Returns"), 
+       col = c("red", "blue"), 
+       lwd = c(2, 2),
+       cex = 1)
+
+valid_idx <- which(!is.na(VaR_t_NASDAQ$log_returns[start_idx:end_idx]) & !is.na(VaR_t_NASDAQ$forecasted_returns[start_idx:end_idx]))
+rmse <- sqrt(mean((VaR_t_NASDAQ$log_returns[start_idx:end_idx][valid_idx] - VaR_t_NASDAQ$forecasted_returns[start_idx:end_idx][valid_idx])^2))
+cat("\nRMSE:", rmse, "\n")
+
+valid_idx <- which(!is.na(VaR_t_NASDAQ$log_returns[start_idx:end_idx]) & !is.na(VaR_t_NASDAQ$forecasted_returns[start_idx:end_idx]))
+sign_match <- sign(VaR_t_NASDAQ$forecasted_returns[start_idx:end_idx][valid_idx]) == sign(VaR_t_NASDAQ$log_returns[start_idx:end_idx][valid_idx])
+hit_rate <- mean(sign_match)  
+cat("\nHit Rate:", round(hit_rate * 100, 2), "%\n")
+
+plot(VaR_t_NASDAQ$date[start_idx:end_idx],VaR_t_NASDAQ$log_returns[start_idx:end_idx], type = "l", col = "blue", 
+     main = "Actual vs. Forecasted Returns", xlab = "Date", ylab = "Returns")
+lines(VaR_t_NASDAQ$date[start_idx:end_idx], VaR_t_NASDAQ$forecasted_returns[start_idx:end_idx], col = "red")  
+legend("bottomright", legend = c("Actual Returns", "Forecasted Returns"), col = c("blue", "red"), lty = c(1,1))
+```
+
+
+```{r}
+# Extract relevant data
+VaR_subset <- VaR_t_NASDAQ[251:2265, c(3, 4)]  # Select log_returns (col 3) and tGARCH (col 4)
+VaR_subset <- na.omit(VaR_subset)
+
+# Compute V_tGARCH only on non-NA values
+V_tGARCH <- -VaR_subset[, 2] - VaR_subset[, 1]  # VaR - returns
+V_tGARCH[V_tGARCH < 0] <- 0  # If negative, replace with 0
+V_tGARCH[V_tGARCH > 0] <- 1  # If positive, replace with 1
+VR_tGARCH <- sum(V_tGARCH) / (nrow(VaR_subset) * 0.01)  
+
+cat("Violation Ratio (VR_tGARCH):", VR_tGARCH, "\n")
+
+# Coverage Test
+ra_t <- VaR_t_NASDAQ[251:nrow(VaR_t), 3]
+VaRa_t <- VaR_t_NASDAQ[251:nrow(VaR_t), "tGARCH"]
+
+# Remove NAs
+valid_idx <- !is.na(ra_t) & !is.na(VaRa_t)
+ra_t <- ra_t[valid_idx]
+VaRa_t <- VaRa_t[valid_idx]
+
+# Indicator function
+eta_t <- ra_t < -VaRa_t
+
+# Compute v1_t, v0_t, and picap_t
+v1_t <- sum(eta_t)
+v0_t <- length(eta_t) - v1_t
+picap_t <- v1_t / (v1_t + v0_t)
+
+
+a_t <- (1 - p)^v0_t * p^v1_t  # Likelihood of restricted model
+b_t <- (1 - picap_t)^v0_t * picap_t^v1_t  # Likelihood of unrestricted model
+
+LR_t <- 2 * (log(b_t / a_t))
+LR_t
+
+if (LR_t > qchisq(p = 1 - p, df = 1)) {
+  print("Null hypothesis H0 is rejected")
+} else {
+  print("We cannot reject the null")
+}
+
+```
+
